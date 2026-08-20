@@ -16,9 +16,6 @@ const shopify = shopifyApp({
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
-  future: {
-    expiringOfflineAccessTokens: true,
-  },
   ...(process.env.SHOP_CUSTOM_DOMAIN
     ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
     : {}),
@@ -32,3 +29,16 @@ export const unauthenticated = shopify.unauthenticated;
 export const login = shopify.login;
 export const registerWebhooks = shopify.registerWebhooks;
 export const sessionStorage = shopify.sessionStorage;
+
+export async function authenticateAdmin(request: Request) {
+  const context = await shopify.authenticate.admin(request);
+
+  if (context.session.accessToken?.trim()) {
+    return context;
+  }
+
+  // Recover sessions created without a usable Admin API token. The signed
+  // App Bridge request can be exchanged again after removing the bad record.
+  await shopify.sessionStorage.deleteSession(context.session.id);
+  return shopify.authenticate.admin(request);
+}

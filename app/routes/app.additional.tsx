@@ -10,10 +10,10 @@ import {
   syncAllFileImages,
   syncArticleImages,
 } from "../image-alt.server";
-import { authenticate } from "../shopify.server";
+import { authenticateAdmin } from "../shopify.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin } = await authenticateAdmin(request);
   const formData = await request.formData();
 
   if (formData.get("intent") === "csv-import") {
