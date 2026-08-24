@@ -94,17 +94,22 @@ export async function parseProductTitleXlsx(
     throw new Error(`Columns not found in Products tab: ${missingColumns.join(", ")}`);
   }
   const altIndex = updateMediaAlt ? headers.indexOf(normalizeHeader(options.altColumn)) : -1;
+  const issueIndex = updateMediaAlt ? headers.indexOf("issue") : -1;
   const imageNumberIndex = headers.findIndex((header) => header === "img #" || header === "image #");
   const imageIdIndex = headers.findIndex((header) => header === "image id");
   if (updateMediaAlt && altIndex < 0) {
     throw new Error("Select a valid ALT text column");
+  }
+  if (updateMediaAlt && issueIndex < 0) {
+    throw new Error('The selected worksheet must contain an "Issue" column');
   }
 
   const matchBy = /product\s*url|handle/i.test(identifierColumn) ? "handle" : "title";
   const byProduct = new Map<string, ProductTitleRow>();
   let previousProductIdentifier = "";
   for (const row of sheet.data.slice(1)) {
-    const rowAlt = updateMediaAlt ? cell(row, altIndex) : "";
+    const issue = updateMediaAlt ? cell(row, issueIndex).toLocaleLowerCase() : "";
+    const rowAlt = updateMediaAlt && issue === "empty" ? cell(row, altIndex) : "";
     const identifier = cell(row, identifierIndex);
     let productIdentifier = identifier;
     if (matchBy === "handle") {
@@ -350,6 +355,15 @@ export async function updateProductTitles(
           mediaUpdateSucceeded = false;
           result.skipped += 1;
           result.errors.push(`${row.identifier}: image ${position} does not exist; ALT skipped`);
+          return [];
+        }
+        if (image.alt?.trim()) {
+          result.skipped += 1;
+          console.log("[product-sheet] existing image ALT protected", {
+            identifier: row.identifier,
+            position,
+            mediaId: image.id,
+          });
           return [];
         }
         return [{
