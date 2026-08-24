@@ -18,6 +18,20 @@ export type ProductTitleResult = {
   mediaUpdated: number;
   skipped: number;
   errors: string[];
+  undo: ProductUndoRecord[];
+};
+
+export type ProductUndoRecord = {
+  productId: string;
+  title?: string;
+  seoTitle?: string | null;
+  media: { id: string; alt: string | null }[];
+};
+
+export type ProductRevertResult = {
+  revertedProducts: number;
+  revertedMedia: number;
+  errors: string[];
 };
 
 type ProductImportOptions = {
@@ -166,16 +180,18 @@ export async function updateProductTitles(
   admin: AdminGraphqlClient,
   rows: ProductTitleRow[],
 ): Promise<ProductTitleResult> {
-  const result: ProductTitleResult = { scanned: rows.length, updated: 0, mediaUpdated: 0, skipped: 0, errors: [] };
+  const result: ProductTitleResult = { scanned: rows.length, updated: 0, mediaUpdated: 0, skipped: 0, errors: [], undo: [] };
 
   type ProductNode = {
     id: string;
     handle: string;
     title: string;
+    seo: { title: string | null };
     media: {
       nodes: {
         id: string;
         mediaContentType: string;
+        alt: string | null;
         image?: { id: string } | null;
       }[];
     };
@@ -191,9 +207,11 @@ export async function updateProductTitles(
               id
               handle
               title
+              seo { title }
               media(first: 250) {
                 nodes {
                   id
+                  alt
                   mediaContentType
                   ... on MediaImage { image { id } }
                 }
@@ -239,9 +257,11 @@ export async function updateProductTitles(
                 id
                 handle
                 title
+                seo { title }
                 media(first: $mediaFirst) {
                   nodes {
                     id
+                    alt
                     mediaContentType
                   }
                 }
@@ -321,6 +341,7 @@ export async function updateProductTitles(
     }
 
     let mediaUpdateSucceeded = true;
+    const undo: ProductUndoRecord = { productId: product.id, media: [] };
     if (row.mediaAlts.length) {
       const images = product.media.nodes.filter((media) => media.mediaContentType === "IMAGE");
       const mediaUpdates = row.mediaAlts.flatMap(({ position, alt }) => {
@@ -379,6 +400,10 @@ export async function updateProductTitles(
         mediaUpdateSucceeded = mediaUpdateSucceeded && !mediaErrors.length && allVerified;
         if (mediaUpdateSucceeded) {
           result.mediaUpdated += media.length;
+          undo.media.push(...mediaUpdates.map((item) => ({
+            id: item.id,
+            alt: images.find((image) => image.id === item.id)?.alt ?? null,
+          })));
         } else {
           result.skipped += media.length;
           result.errors.push(
@@ -407,7 +432,73 @@ export async function updateProductTitles(
         ...(updateJson.data?.productUpdate?.userErrors ?? []).map((error: { message: string }) => error.message),
       ];
       if (errors.length) result.errors.push(`${row.identifier} title: ${errors.join(", ")}`);
-      else result.updated += 1;
+      else {
+        result.updated += 1;
+        undo.title = product.title;
+        undo.seoTitle = product.seo.title;
+      }
+    }
+    if (undo.title !== undefined || undo.media.length) result.undo.push(undo);
+  }
+
+  return result;
+}
+
+export async function revertProductUpdates(
+  admin: AdminGraphqlClient,
+  records: ProductUndoRecord[],
+  beforeProductRevert?: (productId: string) => void,
+): Promise<ProductRevertResult> {
+  const result: ProductRevertResult = { revertedProducts: 0, revertedMedia: 0, errors: [] };
+
+  for (const record of records) {
+    beforeProductRevert?.(record.productId);
+    if (record.title !== undefined) {
+      const response = await admin.graphql(
+        `#graphql
+          mutation RevertProductTitle($product: ProductUpdateInput!) {
+            productUpdate(product: $product) {
+              product { id title seo { title } }
+              userErrors { field message }
+            }
+          }`,
+        {
+          variables: {
+            product: {
+              id: record.productId,
+              title: record.title,
+              seo: { title: record.seoTitle },
+            },
+          },
+        },
+      );
+      const json = await response.json();
+      const errors = [
+        ...(json.errors ?? []).map((error: { message: string }) => error.message),
+        ...(json.data?.productUpdate?.userErrors ?? []).map((error: { message: string }) => error.message),
+      ];
+      if (errors.length) result.errors.push(`${record.productId} title: ${errors.join(", ")}`);
+      else result.revertedProducts += 1;
+    }
+
+    if (record.media.length) {
+      const response = await admin.graphql(
+        `#graphql
+          mutation RevertProductImageAlt($files: [FileUpdateInput!]!) {
+            fileUpdate(files: $files) {
+              files { id alt }
+              userErrors { field message }
+            }
+          }`,
+        { variables: { files: record.media } },
+      );
+      const json = await response.json();
+      const errors = [
+        ...(json.errors ?? []).map((error: { message: string }) => error.message),
+        ...(json.data?.fileUpdate?.userErrors ?? []).map((error: { message: string }) => error.message),
+      ];
+      if (errors.length) result.errors.push(`${record.productId} image ALT: ${errors.join(", ")}`);
+      else result.revertedMedia += json.data?.fileUpdate?.files?.length ?? 0;
     }
   }
 

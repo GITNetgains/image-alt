@@ -5,14 +5,44 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import {
   parseProductTitleXlsx,
+  revertProductUpdates,
   scanProductTitleWorkbook,
   updateProductTitles,
 } from "../product-title.server";
+import type { ProductUndoRecord } from "../product-title.server";
+import { pauseProductAltSync } from "../product-alt-sync-pause.server";
 import { authenticateAdmin } from "../shopify.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin } = await authenticateAdmin(request);
+  const { admin, session } = await authenticateAdmin(request);
   const formData = await request.formData();
+  if (formData.get("intent") === "revert") {
+    try {
+      const parsed = JSON.parse(String(formData.get("records") ?? "[]"));
+      if (!Array.isArray(parsed)) throw new Error("Invalid revert data");
+      const records = parsed as ProductUndoRecord[];
+      const result = await revertProductUpdates(
+        admin,
+        records,
+        (productId) => pauseProductAltSync(session.shop, productId),
+      );
+      const offset = Number(formData.get("offset") ?? 0);
+      return {
+        mode: "revert" as const,
+        ...result,
+        nextOffset: offset + records.length,
+        errors: result.errors,
+      };
+    } catch (error) {
+      return {
+        mode: "revert" as const,
+        revertedProducts: 0,
+        revertedMedia: 0,
+        nextOffset: Number(formData.get("offset") ?? 0),
+        errors: [error instanceof Error ? error.message : "Revert failed"],
+      };
+    }
+  }
   const spreadsheet = formData.get("spreadsheet");
   if (!(spreadsheet instanceof File) || !spreadsheet.size) {
     return { mode: "update" as const, scanned: 0, updated: 0, mediaUpdated: 0, skipped: 0, total: 0, nextOffset: 0, done: true, errors: ["Please select an XLSX file"] };
@@ -88,6 +118,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 export default function ProductTitlesPage() {
   const scanFetcher = useFetcher<typeof action>();
   const fetcher = useFetcher<typeof action>();
+  const revertFetcher = useFetcher<typeof action>();
   const shopify = useAppBridge();
   const selectedFile = useRef<File | null>(null);
   const [fileName, setFileName] = useState("");
@@ -99,6 +130,13 @@ export default function ProductTitlesPage() {
   const [updateMediaAlt, setUpdateMediaAlt] = useState(true);
   const [altColumn, setAltColumn] = useState("");
   const [progress, setProgress] = useState({ processed: 0, updated: 0, mediaUpdated: 0, skipped: 0, errors: [] as string[] });
+  const [undoRecords, setUndoRecords] = useState<ProductUndoRecord[]>([]);
+  const [revertProgress, setRevertProgress] = useState({
+    processed: 0,
+    products: 0,
+    media: 0,
+    errors: [] as string[],
+  });
 
   const submitBatch = (offset: number) => {
     if (!selectedFile.current) return;
@@ -114,9 +152,21 @@ export default function ProductTitlesPage() {
     fetcher.submit(formData, { method: "post", encType: "multipart/form-data" });
   };
 
+  const submitRevertBatch = (offset: number) => {
+    const records = undoRecords.slice(offset, offset + 10);
+    if (!records.length) return;
+    const formData = new FormData();
+    formData.set("intent", "revert");
+    formData.set("offset", String(offset));
+    formData.set("records", JSON.stringify(records));
+    revertFetcher.submit(formData, { method: "post" });
+  };
+
   useEffect(() => {
     const data = fetcher.data;
     if (!data || data.mode !== "update") return;
+    const undo = "undo" in data ? data.undo : [];
+    setUndoRecords((current) => [...current, ...undo]);
     setProgress((current) => ({
       processed: data.nextOffset,
       updated: current.updated + data.updated,
@@ -132,6 +182,27 @@ export default function ProductTitlesPage() {
     // fetcher is stable for the lifetime of the route.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetcher.data, shopify]);
+
+  useEffect(() => {
+    const data = revertFetcher.data;
+    if (!data || data.mode !== "revert") return;
+    setRevertProgress((current) => ({
+      processed: data.nextOffset,
+      products: current.products + data.revertedProducts,
+      media: current.media + data.revertedMedia,
+      errors: [...current.errors, ...data.errors],
+    }));
+    if (data.nextOffset < undoRecords.length) {
+      submitRevertBatch(data.nextOffset);
+      return;
+    }
+    setUndoRecords([]);
+    shopify.toast.show(
+      data.errors.length ? "Revert finished with errors" : "Last upload reverted",
+    );
+    // The fetcher and undo snapshot remain stable during a revert run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revertFetcher.data, shopify]);
 
   const scannedSheets = scanFetcher.data?.mode === "scan" ? scanFetcher.data.sheets : [];
   const selectedSheet = scannedSheets.find((sheet) => sheet.name === sheetName);
@@ -409,6 +480,8 @@ export default function ProductTitlesPage() {
                 disabled={!fileName || !confirmed || (!updateTitles && !updateMediaAlt)}
                 onClick={() => {
                   setProgress({ processed: 0, updated: 0, mediaUpdated: 0, skipped: 0, errors: [] });
+                  setUndoRecords([]);
+                  setRevertProgress({ processed: 0, products: 0, media: 0, errors: [] });
                   submitBatch(0);
                 }}
               >
@@ -431,6 +504,47 @@ export default function ProductTitlesPage() {
               {progress.errors.length > 0 && (
                 <s-unordered-list>
                   {progress.errors.slice(0, 20).map((error, index) => (
+                    <s-list-item key={`${index}-${error}`}>{error}</s-list-item>
+                  ))}
+                </s-unordered-list>
+              )}
+            </s-banner>
+          )}
+          {fetcher.data?.mode === "update" && fetcher.data.done && undoRecords.length > 0 && (
+            <s-box padding="base" background="subdued" borderRadius="base">
+              <s-stack direction="block" gap="base">
+                <s-text type="strong">Undo this upload</s-text>
+                <s-paragraph color="subdued">
+                  Restore the product titles, SEO titles, and image ALT text saved immediately
+                  before this upload. This option remains available until another upload starts
+                  or this page is reloaded.
+                </s-paragraph>
+                <s-button
+                  type="button"
+                  tone="critical"
+                  loading={revertFetcher.state !== "idle"}
+                  disabled={fetcher.state !== "idle" || revertFetcher.state !== "idle"}
+                  onClick={() => {
+                    setRevertProgress({ processed: 0, products: 0, media: 0, errors: [] });
+                    submitRevertBatch(0);
+                  }}
+                >
+                  Revert last upload
+                </s-button>
+              </s-stack>
+            </s-box>
+          )}
+          {(revertFetcher.state !== "idle" || revertProgress.processed > 0) && (
+            <s-banner
+              heading={`Reverted ${revertProgress.processed} of ${undoRecords.length || revertProgress.processed} products`}
+              tone={revertProgress.errors.length ? "warning" : "success"}
+            >
+              <s-paragraph>
+                Titles: {revertProgress.products} · Image ALTs: {revertProgress.media}
+              </s-paragraph>
+              {revertProgress.errors.length > 0 && (
+                <s-unordered-list>
+                  {revertProgress.errors.slice(0, 20).map((error, index) => (
                     <s-list-item key={`${index}-${error}`}>{error}</s-list-item>
                   ))}
                 </s-unordered-list>
