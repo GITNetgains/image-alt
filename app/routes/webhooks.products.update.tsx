@@ -9,6 +9,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const productId = `gid://shopify/Product/${payload.id}`;
   const result = await syncProductImages(admin, productId);
-  if (result.errors.length) console.error("Product image alt sync errors", { productId, errors: result.errors });
+  if (result.errors.length) {
+    console.error("Product image alt sync errors", {
+      productId,
+      errors: result.errors,
+    });
+  }
   return new Response();
 };
