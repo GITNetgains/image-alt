@@ -94,22 +94,17 @@ export async function parseProductTitleXlsx(
     throw new Error(`Columns not found in Products tab: ${missingColumns.join(", ")}`);
   }
   const altIndex = updateMediaAlt ? headers.indexOf(normalizeHeader(options.altColumn)) : -1;
-  const issueIndex = updateMediaAlt ? headers.indexOf("issue") : -1;
   const imageNumberIndex = headers.findIndex((header) => header === "img #" || header === "image #");
   const imageIdIndex = headers.findIndex((header) => header === "image id");
   if (updateMediaAlt && altIndex < 0) {
     throw new Error("Select a valid ALT text column");
-  }
-  if (updateMediaAlt && issueIndex < 0) {
-    throw new Error('The selected worksheet must contain an "Issue" column');
   }
 
   const matchBy = /product\s*url|handle/i.test(identifierColumn) ? "handle" : "title";
   const byProduct = new Map<string, ProductTitleRow>();
   let previousProductIdentifier = "";
   for (const row of sheet.data.slice(1)) {
-    const issue = updateMediaAlt ? cell(row, issueIndex).toLocaleLowerCase() : "";
-    const rowAlt = updateMediaAlt && issue === "empty" ? cell(row, altIndex) : "";
+    const rowAlt = updateMediaAlt ? cell(row, altIndex) : "";
     const identifier = cell(row, identifierIndex);
     let productIdentifier = identifier;
     if (matchBy === "handle") {
@@ -154,7 +149,9 @@ export async function parseProductTitleXlsx(
         });
       }
     }
-    if ((!updateTitles || product.newTitle) && (!updateMediaAlt || product.mediaAlts.length)) {
+    const hasTitleUpdate = updateTitles && Boolean(product.newTitle);
+    const hasMediaUpdate = updateMediaAlt && product.mediaAlts.length > 0;
+    if (hasTitleUpdate || hasMediaUpdate) {
       byProduct.set(mapKey, product);
     }
   }
@@ -421,7 +418,7 @@ export async function updateProductTitles(
         } else {
           result.skipped += media.length;
           result.errors.push(
-            `${row.identifier}: image ALT update failed${mediaErrors.length ? `: ${mediaErrors.join(", ")}` : " verification"}; title not updated`,
+            `${row.identifier}: image ALT update failed${mediaErrors.length ? `: ${mediaErrors.join(", ")}` : " verification"}`,
           );
         }
       }
@@ -429,7 +426,7 @@ export async function updateProductTitles(
 
     // Update the title after media ALT text. This prevents any legacy product-update webhook
     // delivery from racing ahead of the spreadsheet ALT write.
-    if (row.newTitle && mediaUpdateSucceeded) {
+    if (row.newTitle) {
       const updateResponse = await admin.graphql(
         `#graphql
           mutation UpdateProductAndSeoTitle($product: ProductUpdateInput!) {

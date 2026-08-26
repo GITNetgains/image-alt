@@ -424,8 +424,8 @@ export default function ProductTitlesPage() {
       <s-section heading="5. Map product image ALT text">
         <s-stack direction="block" gap="base">
           <s-banner heading="Product-wise image mapping" tone="info">
-            Only rows where the Issue column is exactly Empty are eligible. PROPOSED ALT values
-            map by Img #, and Shopify images that already have ALT text are always protected.
+            Every row with a non-empty selected ALT value is eligible. ALT values map by Img #,
+            and Shopify images that already have ALT text are always protected.
           </s-banner>
           <s-grid gridTemplateColumns="minmax(240px, 1fr)" gap="base">
             <s-select
@@ -467,7 +467,7 @@ export default function ProductTitlesPage() {
                     ? "I confirm that only blank product image ALT text will be filled."
                     : "I confirm that Product Titles and SEO Meta Titles may be overwritten."}
                 details={updateMediaAlt
-                  ? "Rows not marked Empty and images with existing ALT text are skipped."
+                  ? "Rows with blank ALT values and images with existing ALT text are skipped."
                   : "Images, ALT text, descriptions, prices, and variants are not changed."}
                 checked={confirmed}
                 onChange={(event) => setConfirmed(event.currentTarget.checked)}
