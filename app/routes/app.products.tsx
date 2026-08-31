@@ -10,6 +10,7 @@ import {
   updateProductTitles,
 } from "../product-title.server";
 import type { ProductUndoRecord } from "../product-title.server";
+import { buildProductTitle } from "../product-title";
 import { pauseProductAltSync } from "../product-alt-sync-pause.server";
 import { authenticateAdmin } from "../shopify.server";
 
@@ -236,12 +237,10 @@ export default function ProductTitlesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanFetcher.data]);
 
-  const sampleTitle = titleColumns
-    .map((column) => selectedSheet?.sampleValues[availableHeaders.indexOf(column)] ?? "")
-    .filter(Boolean)
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const sampleTitle = buildProductTitle(
+    titleColumns,
+    titleColumns.map((column) => selectedSheet?.sampleValues[availableHeaders.indexOf(column)] ?? ""),
+  );
 
   const moveTitleColumn = (index: number, direction: -1 | 1) => {
     setTitleColumns((current) => {

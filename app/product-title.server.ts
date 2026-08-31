@@ -1,4 +1,5 @@
 import readXlsxFile from "read-excel-file/node";
+import { buildProductTitle } from "./product-title";
 
 type AdminGraphqlClient = {
   graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
@@ -124,7 +125,7 @@ export async function parseProductTitleXlsx(
 
     const sourceValues = selectedIndexes.map((index) => cell(row, index));
     const newTitle = updateTitles
-      ? sourceValues.filter(Boolean).join(" ").replace(/\s+/g, " ").trim()
+      ? buildProductTitle(selectedColumns, sourceValues)
       : "";
     const mapKey = `${matchBy}:${productIdentifier.toLocaleLowerCase()}`;
     const existing = byProduct.get(mapKey);
