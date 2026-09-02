@@ -1,61 +1,39 @@
-const normalizeTitlePart = (value: string) =>
+const normalizeTitleWord = (value: string) =>
   value
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLocaleLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, "")
     .trim();
 
-const titleContainsPart = (title: string, part: string) => {
-  const normalizedTitle = normalizeTitlePart(title);
-  const normalizedPart = normalizeTitlePart(part);
-  if (!normalizedTitle || !normalizedPart) return false;
+/**
+ * Builds a title in the selected column order while retaining only the first
+ * occurrence of each word across columns. Comparison is case- and
+ * punctuation-insensitive, but the spelling and capitalisation from the
+ * spreadsheet are preserved. Repeated words inside one column are retained
+ * because they may be meaningful dimensions or model names (for example,
+ * "3 x 3").
+ *
+ * Example: ["Nike", "Nike Air Max Shoes", "Running Shoes"]
+ * becomes "Nike Air Max Shoes Running".
+ */
+export function buildProductTitle(_columns: string[], values: string[]) {
+  const seenWords = new Set<string>();
+  const titleWords: string[] = [];
 
-  return ` ${normalizedTitle} `.includes(` ${normalizedPart} `);
-};
+  for (const value of values) {
+    const columnWords = new Set<string>();
 
-const titleContainsCategory = (title: string, category: string) => {
-  if (titleContainsPart(title, category)) return true;
+    for (const word of value.trim().split(/\s+/)) {
+      const normalizedWord = normalizeTitleWord(word);
+      if (!normalizedWord || seenWords.has(normalizedWord)) continue;
 
-  const normalizedTitle = ` ${normalizeTitlePart(title)} `;
-  const categoryWords = normalizeTitlePart(category).split(" ").filter(Boolean);
-
-  // A category can be broader than the wording already present in the product title.
-  // Example: "HUNTING GROUND BLIND" must not be appended to a title containing
-  // "GROUND BLIND". Match a consecutive two-or-more-word category phrase as well.
-  for (let phraseLength = categoryWords.length - 1; phraseLength >= 2; phraseLength -= 1) {
-    for (let start = 0; start + phraseLength <= categoryWords.length; start += 1) {
-      const phrase = categoryWords.slice(start, start + phraseLength).join(" ");
-      if (normalizedTitle.includes(` ${phrase} `)) return true;
+      columnWords.add(normalizedWord);
+      titleWords.push(word);
     }
+
+    for (const word of columnWords) seenWords.add(word);
   }
 
-  return false;
-};
-
-const isProductTitleColumn = (column: string) =>
-  /^(product|product title|title)$/.test(normalizeTitlePart(column));
-
-const conditionalColumnType = (column: string) => {
-  const normalizedColumn = normalizeTitlePart(column);
-  if (/^(brand|brand name)$/.test(normalizedColumn)) return "brand";
-  if (/^(category|product category)$/.test(normalizedColumn)) return "category";
-  return null;
-};
-
-export function buildProductTitle(columns: string[], values: string[]) {
-  const productTitleIndex = columns.findIndex(isProductTitleColumn);
-  const productTitle = productTitleIndex >= 0 ? values[productTitleIndex] ?? "" : "";
-
-  return values
-    .filter((value, index) => {
-      if (!value.trim()) return false;
-      const columnType = conditionalColumnType(columns[index] ?? "");
-      if (columnType === "brand") return !titleContainsPart(productTitle, value);
-      if (columnType === "category") return !titleContainsCategory(productTitle, value);
-      return true;
-    })
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return titleWords.join(" ").trim();
 }
