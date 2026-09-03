@@ -73,7 +73,7 @@ export async function scanProductTitleWorkbook(buffer: ArrayBuffer): Promise<Wor
 
 export async function parseProductTitleXlsx(
   buffer: ArrayBuffer,
-  selectedColumns: string[] = ["Brand", "Product", "Category"],
+  selectedColumns: string[] = ["Brand", "Product"],
   sheetName = "Products",
   identifierColumn = "Product URL",
   options: ProductImportOptions = {},

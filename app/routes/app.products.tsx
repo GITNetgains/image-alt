@@ -221,7 +221,7 @@ export default function ProductTitlesPage() {
       ?? "",
     );
     setAltColumn(headers.find((header) => /proposed\s*alt|alt\s*text/i.test(header)) ?? headers[0] ?? "");
-    const preferred = ["Brand", "Product", "Category"].flatMap((wanted) => {
+    const preferred = ["Brand", "Product"].flatMap((wanted) => {
       const match = headers.find((header) => header.trim().toLowerCase() === wanted.toLowerCase());
       return match ? [match] : [];
     });
@@ -368,8 +368,8 @@ export default function ProductTitlesPage() {
       <s-section heading="4. Build the title format">
         <s-stack direction="block" gap="base">
           <s-paragraph color="subdued">
-            Add columns in the exact sequence required for the new Product Title. The same
-            generated value is also used as the SEO Meta Title.
+            Select Brand and Product to generate “Brand - Product title”. Category columns are
+            excluded. The same generated value is also used as the SEO Meta Title.
           </s-paragraph>
           {titleColumns.map((column, index) => (
             <s-box key={`${index}-${column}`} padding="base" background="subdued" borderRadius="base">
