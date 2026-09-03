@@ -242,16 +242,6 @@ export default function ProductTitlesPage() {
     titleColumns.map((column) => selectedSheet?.sampleValues[availableHeaders.indexOf(column)] ?? ""),
   );
 
-  const moveTitleColumn = (index: number, direction: -1 | 1) => {
-    setTitleColumns((current) => {
-      const destination = index + direction;
-      if (destination < 0 || destination >= current.length) return current;
-      const next = [...current];
-      [next[index], next[destination]] = [next[destination], next[index]];
-      return next;
-    });
-  };
-
   return (
     <s-page heading="Product bulk updater" inlineSize="base">
       <s-banner heading="Dynamic Excel mapping" tone="info">
@@ -373,7 +363,7 @@ export default function ProductTitlesPage() {
           </s-paragraph>
           {titleColumns.map((column, index) => (
             <s-box key={`${index}-${column}`} padding="base" background="subdued" borderRadius="base">
-            <s-grid gridTemplateColumns="auto minmax(180px, 1fr) auto" gap="base" alignItems="center">
+            <s-grid gridTemplateColumns="auto minmax(180px, 1fr)" gap="base" alignItems="center">
               <s-badge tone="info">Part {index + 1}</s-badge>
               <s-select
                 label={`Title column ${index + 1}`}
@@ -389,22 +379,9 @@ export default function ProductTitlesPage() {
                   <s-option key={option} value={option}>{option}</s-option>
                 ))}
               </s-select>
-              <s-button-group gap="base">
-                <s-button type="button" variant="tertiary" disabled={index === 0 || fetcher.state !== "idle"} onClick={() => moveTitleColumn(index, -1)}>Up</s-button>
-                <s-button type="button" variant="tertiary" disabled={index === titleColumns.length - 1 || fetcher.state !== "idle"} onClick={() => moveTitleColumn(index, 1)}>Down</s-button>
-                <s-button type="button" variant="tertiary" tone="critical" disabled={titleColumns.length === 1 || fetcher.state !== "idle"} onClick={() => setTitleColumns((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Remove</s-button>
-              </s-button-group>
             </s-grid>
             </s-box>
           ))}
-          <s-button
-            type="button"
-            icon="plus"
-            disabled={fetcher.state !== "idle"}
-            onClick={() => setTitleColumns((current) => [...current, availableHeaders[0]])}
-          >
-            Add column
-          </s-button>
           <s-box padding="base" background="subdued" border="base" borderRadius="base">
             <s-stack direction="block" gap="small">
               <s-text type="strong">Live title preview</s-text>
