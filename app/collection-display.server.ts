@@ -6,13 +6,11 @@ type AdminClient = {
   graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
 };
 
-export type MatchBy = "color" | "sku";
-
 export type CollectionDisplaySetting = {
   id: string;
   title: string;
   handle: string;
-  matchBy: MatchBy;
+  optionName: string;
   values: string[];
 };
 
@@ -35,16 +33,13 @@ function parseValues(value: unknown) {
 function parseSetting(node: CollectionNode): CollectionDisplaySetting | null {
   if (node.setting?.value) {
     try {
-      const parsed = JSON.parse(node.setting.value) as { matchBy?: unknown; values?: unknown };
+      const parsed = JSON.parse(node.setting.value) as { optionName?: unknown; matchBy?: unknown; values?: unknown };
       const values = parseValues(parsed.values);
+      const optionName = typeof parsed.optionName === "string" && parsed.optionName
+        ? parsed.optionName
+        : (typeof parsed.matchBy === "string" && parsed.matchBy ? parsed.matchBy : "Color");
       if (values.length) {
-        return {
-          id: node.id,
-          title: node.title,
-          handle: node.handle,
-          matchBy: parsed.matchBy === "sku" ? "sku" : "color",
-          values,
-        };
+        return { id: node.id, title: node.title, handle: node.handle, optionName, values };
       }
     } catch {
       // Fall through to the legacy color metafield.
@@ -55,7 +50,7 @@ function parseSetting(node: CollectionNode): CollectionDisplaySetting | null {
   try {
     const values = parseValues(JSON.parse(node.legacyColors.value));
     return values.length
-      ? { id: node.id, title: node.title, handle: node.handle, matchBy: "color", values }
+      ? { id: node.id, title: node.title, handle: node.handle, optionName: "Color", values }
       : null;
   } catch {
     return null;
@@ -102,6 +97,74 @@ export async function getCollectionDisplaySettings(admin: AdminClient) {
   return configured;
 }
 
+export type CollectionOptionChoices = {
+  optionNames: string[];
+  valuesByOption: Record<string, string[]>;
+};
+
+type ProductOptionsNode = {
+  options: { name: string; values: string[] }[];
+};
+
+export async function getCollectionOptionChoices(
+  admin: AdminClient,
+  collectionId: string,
+): Promise<CollectionOptionChoices> {
+  const valuesByOption = new Map<string, Set<string>>();
+  let cursor: string | null = null;
+  let hasNextPage = true;
+  let pages = 0;
+
+  while (hasNextPage && pages < 5) {
+    const response = await admin.graphql(
+      `#graphql
+        query CollectionOptionChoices($id: ID!, $after: String) {
+          collection(id: $id) {
+            products(first: 50, after: $after) {
+              nodes {
+                options { name values }
+              }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }`,
+      { variables: { id: collectionId, after: cursor } },
+    );
+    const payload = await response.json() as {
+      data?: {
+        collection: {
+          products: { nodes: ProductOptionsNode[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
+        } | null;
+      };
+      errors?: { message: string }[];
+    };
+    if (payload.errors?.length || !payload.data?.collection) {
+      throw new Error(payload.errors?.map((error) => error.message).join(", ") || "Could not load collection options");
+    }
+
+    for (const product of payload.data.collection.products.nodes) {
+      for (const option of product.options) {
+        const set = valuesByOption.get(option.name) ?? new Set<string>();
+        for (const value of option.values) {
+          if (value?.trim()) set.add(value.trim());
+        }
+        valuesByOption.set(option.name, set);
+      }
+    }
+
+    hasNextPage = payload.data.collection.products.pageInfo.hasNextPage;
+    cursor = payload.data.collection.products.pageInfo.endCursor;
+    pages += 1;
+  }
+
+  return {
+    optionNames: [...valuesByOption.keys()],
+    valuesByOption: Object.fromEntries(
+      [...valuesByOption.entries()].map(([name, values]) => [name, [...values]]),
+    ),
+  };
+}
+
 async function runMutation(
   admin: AdminClient,
   query: string,
@@ -130,21 +193,20 @@ export async function saveCollectionDisplaySettings(
       ownerId: setting.id,
       namespace: SETTINGS_NAMESPACE,
     };
-    const fields: Record<string, unknown>[] = [{
-      ...common,
-      key: SETTINGS_KEY,
-      type: "json",
-      value: JSON.stringify({ matchBy: setting.matchBy, values: setting.values }),
-    }];
-    if (setting.matchBy === "color") {
-      fields.push({
+    return [
+      {
+        ...common,
+        key: SETTINGS_KEY,
+        type: "json",
+        value: JSON.stringify({ optionName: setting.optionName, values: setting.values }),
+      },
+      {
         ...common,
         key: LEGACY_COLOR_KEY,
         type: "list.single_line_text_field",
         value: JSON.stringify(setting.values),
-      });
-    }
-    return fields;
+      },
+    ];
   });
 
   for (let index = 0; index < metafields.length; index += 25) {
@@ -162,27 +224,25 @@ export async function saveCollectionDisplaySettings(
     );
   }
 
-  const skuIds = settings.filter((setting) => setting.matchBy === "sku").map((setting) => setting.id);
-  const deleteIds = [...new Set([...removedIds, ...skuIds])];
-  const identifiers = deleteIds.flatMap((ownerId) => [
-    { ownerId, namespace: SETTINGS_NAMESPACE, key: LEGACY_COLOR_KEY },
-    ...(removedIds.includes(ownerId)
-      ? [{ ownerId, namespace: SETTINGS_NAMESPACE, key: SETTINGS_KEY }]
-      : []),
-  ]);
+  if (removedIds.length) {
+    const identifiers = removedIds.flatMap((ownerId) => [
+      { ownerId, namespace: SETTINGS_NAMESPACE, key: LEGACY_COLOR_KEY },
+      { ownerId, namespace: SETTINGS_NAMESPACE, key: SETTINGS_KEY },
+    ]);
 
-  for (let index = 0; index < identifiers.length; index += 25) {
-    await runMutation(
-      admin,
-      `#graphql
-        mutation DeleteCollectionDisplaySettings($metafields: [MetafieldIdentifierInput!]!) {
-          metafieldsDelete(metafields: $metafields) {
-            deletedMetafields { ownerId namespace key }
-            userErrors { field message }
-          }
-        }`,
-      { metafields: identifiers.slice(index, index + 25) },
-      "metafieldsDelete",
-    );
+    for (let index = 0; index < identifiers.length; index += 25) {
+      await runMutation(
+        admin,
+        `#graphql
+          mutation DeleteCollectionDisplaySettings($metafields: [MetafieldIdentifierInput!]!) {
+            metafieldsDelete(metafields: $metafields) {
+              deletedMetafields { ownerId namespace key }
+              userErrors { field message }
+            }
+          }`,
+        { metafields: identifiers.slice(index, index + 25) },
+        "metafieldsDelete",
+      );
+    }
   }
 }

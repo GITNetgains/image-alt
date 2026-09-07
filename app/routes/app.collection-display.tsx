@@ -7,7 +7,7 @@ import {
   getCollectionDisplaySettings,
   saveCollectionDisplaySettings,
 } from "../collection-display.server";
-import type { CollectionDisplaySetting, MatchBy } from "../collection-display.server";
+import type { CollectionDisplaySetting, CollectionOptionChoices } from "../collection-display.server";
 import { authenticateAdmin } from "../shopify.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -34,15 +34,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (
         typeof candidate.id !== "string" || !candidate.id.startsWith("gid://shopify/Collection/") ||
         typeof candidate.title !== "string" || typeof candidate.handle !== "string" ||
-        (candidate.matchBy !== "color" && candidate.matchBy !== "sku") || !values.length
+        typeof candidate.optionName !== "string" || !candidate.optionName.trim() || !values.length
       ) {
-        throw new Error("Every collection needs at least one valid Color or SKU value");
+        throw new Error("Every collection needs an option and at least one preferred value");
       }
       return {
         id: candidate.id,
         title: candidate.title,
         handle: candidate.handle,
-        matchBy: candidate.matchBy,
+        optionName: candidate.optionName.trim(),
         values,
       };
     });
@@ -58,8 +58,136 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 type PickedCollection = { id: string; title: string; handle?: string };
 
-function normalizeLines(value: string) {
-  return value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
+function CollectionSettingCard({
+  setting,
+  onUpdate,
+  onRemove,
+}: {
+  setting: CollectionDisplaySetting;
+  onUpdate: (patch: Partial<CollectionDisplaySetting>) => void;
+  onRemove: () => void;
+}) {
+  const optionsFetcher = useFetcher<CollectionOptionChoices>();
+
+  useEffect(() => {
+    if (optionsFetcher.state === "idle" && !optionsFetcher.data) {
+      optionsFetcher.load(`/app/collection-display/options?collectionId=${encodeURIComponent(setting.id)}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setting.id]);
+
+  const optionNames = optionsFetcher.data?.optionNames ?? [];
+  const isLoading = optionsFetcher.state !== "idle";
+
+  useEffect(() => {
+    if (optionNames.length && !optionNames.includes(setting.optionName)) {
+      onUpdate({ optionName: optionNames[0], values: [] });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [optionNames.join("|")]);
+
+  const availableValues = (optionsFetcher.data?.valuesByOption[setting.optionName] ?? [])
+    .filter((value) => !setting.values.includes(value));
+
+  const removeValue = (value: string) => {
+    onUpdate({ values: setting.values.filter((item) => item !== value) });
+  };
+
+  const moveValue = (index: number, direction: -1 | 1) => {
+    const next = [...setting.values];
+    const target = index + direction;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    onUpdate({ values: next });
+  };
+
+  return (
+    <s-box padding="base" border="base" borderRadius="base">
+      <s-stack direction="block" gap="base">
+        <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
+          <s-stack direction="block" gap="small">
+            <s-text type="strong">{setting.title}</s-text>
+            <s-text color="subdued">/{setting.handle}</s-text>
+          </s-stack>
+          <s-button type="button" variant="tertiary" tone="critical" onClick={onRemove}>
+            Remove
+          </s-button>
+        </s-grid>
+
+        <s-grid gridTemplateColumns="minmax(180px, 0.35fr) minmax(260px, 1fr)" gap="base" alignItems="start">
+          <s-select
+            label="Option"
+            disabled={isLoading || !optionNames.length}
+            value={setting.optionName}
+            onChange={(event) => onUpdate({ optionName: event.currentTarget.value, values: [] })}
+          >
+            {optionNames.length ? (
+              optionNames.map((name) => <s-option key={name} value={name}>{name}</s-option>)
+            ) : (
+              <s-option value={setting.optionName}>{isLoading ? "Loading…" : setting.optionName}</s-option>
+            )}
+          </s-select>
+
+          <s-stack direction="block" gap="small">
+            <s-select
+              label="Add a preferred value"
+              disabled={isLoading || !availableValues.length}
+              value=""
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                if (value) onUpdate({ values: [...setting.values, value] });
+              }}
+            >
+              <s-option value="">
+                {isLoading ? "Loading values…" : (availableValues.length ? "Choose a value" : "No more values")}
+              </s-option>
+              {availableValues.map((value) => (
+                <s-option key={value} value={value}>{value}</s-option>
+              ))}
+            </s-select>
+
+            {setting.values.length > 0 && (
+              <s-stack direction="block" gap="small-200">
+                {setting.values.map((value, index) => (
+                  <s-box key={value} padding="small-300" background="subdued" borderRadius="base">
+                    <s-grid gridTemplateColumns="auto 1fr auto auto auto" gap="small" alignItems="center">
+                      <s-badge>{index + 1}</s-badge>
+                      <s-text>{value}</s-text>
+                      <s-button
+                        type="button"
+                        variant="tertiary"
+                        icon="chevron-up"
+                        accessibilityLabel={`Move ${value} up`}
+                        disabled={index === 0}
+                        onClick={() => moveValue(index, -1)}
+                      ></s-button>
+                      <s-button
+                        type="button"
+                        variant="tertiary"
+                        icon="chevron-down"
+                        accessibilityLabel={`Move ${value} down`}
+                        disabled={index === setting.values.length - 1}
+                        onClick={() => moveValue(index, 1)}
+                      ></s-button>
+                      <s-button
+                        type="button"
+                        variant="tertiary"
+                        tone="critical"
+                        icon="x"
+                        accessibilityLabel={`Remove ${value}`}
+                        onClick={() => removeValue(value)}
+                      ></s-button>
+                    </s-grid>
+                  </s-box>
+                ))}
+              </s-stack>
+            )}
+            <s-text color="subdued">First value has highest priority.</s-text>
+          </s-stack>
+        </s-grid>
+      </s-stack>
+    </s-box>
+  );
 }
 
 export default function CollectionDisplayPage() {
@@ -87,13 +215,17 @@ export default function CollectionDisplayPage() {
       id: collection.id,
       title: collection.title,
       handle: collection.handle ?? "",
-      matchBy: "color" as const,
+      optionName: "Color",
       values: [],
     })));
   };
 
   const updateSetting = (id: string, patch: Partial<CollectionDisplaySetting>) => {
     setSettings((current) => current.map((setting) => setting.id === id ? { ...setting, ...patch } : setting));
+  };
+
+  const removeSetting = (id: string) => {
+    setSettings((current) => current.filter((item) => item.id !== id));
   };
 
   const save = () => {
@@ -112,7 +244,9 @@ export default function CollectionDisplayPage() {
       </s-button>
 
       <s-banner heading="Set the first variant shown on collection cards" tone="info">
-        Add any number of collections, choose Color or SKU, then enter preferred values in priority order. The first matching variant is shown; products without a match keep their normal featured image.
+        Add any number of collections, pick which option to match (e.g. Color), then choose preferred values in
+        priority order from the store&apos;s actual product data — nothing to type by hand. The first matching
+        variant is shown; products without a match keep their normal featured image.
       </s-banner>
 
       <s-section heading="Collections">
@@ -135,49 +269,17 @@ export default function CollectionDisplayPage() {
           )}
 
           {settings.map((setting) => (
-            <s-box key={setting.id} padding="base" border="base" borderRadius="base">
-              <s-stack direction="block" gap="base">
-                <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
-                  <s-stack direction="block" gap="small">
-                    <s-text type="strong">{setting.title}</s-text>
-                    <s-text color="subdued">/{setting.handle}</s-text>
-                  </s-stack>
-                  <s-button
-                    type="button"
-                    variant="tertiary"
-                    tone="critical"
-                    onClick={() => setSettings((current) => current.filter((item) => item.id !== setting.id))}
-                  >
-                    Remove
-                  </s-button>
-                </s-grid>
-                <s-grid gridTemplateColumns="minmax(180px, 0.35fr) minmax(260px, 1fr)" gap="base" alignItems="start">
-                  <s-select
-                    label="Match variant by"
-                    name={`match-${setting.id}`}
-                    value={setting.matchBy}
-                    onChange={(event) => updateSetting(setting.id, { matchBy: event.currentTarget.value as MatchBy })}
-                  >
-                    <s-option value="color">Color</s-option>
-                    <s-option value="sku">SKU</s-option>
-                  </s-select>
-                  <s-text-area
-                    label={setting.matchBy === "color" ? "Preferred colors" : "Preferred SKUs"}
-                    details="Enter one value per line, in priority order. The first line has highest priority."
-                    name={`values-${setting.id}`}
-                    rows={3}
-                    value={setting.values.join("\n")}
-                    placeholder={setting.matchBy === "color" ? "Elevated II\nCover" : "SKU-PRIMARY\nSKU-FALLBACK"}
-                    onChange={(event) => updateSetting(setting.id, { values: normalizeLines(event.currentTarget.value) })}
-                  ></s-text-area>
-                </s-grid>
-              </s-stack>
-            </s-box>
+            <CollectionSettingCard
+              key={setting.id}
+              setting={setting}
+              onUpdate={(patch) => updateSetting(setting.id, patch)}
+              onRemove={() => removeSetting(setting.id)}
+            />
           ))}
 
           {hasEmptyValues && (
             <s-banner heading="Preferred value required" tone="warning">
-              Add at least one Color or SKU value to every selected collection before saving.
+              Add at least one value to every selected collection before saving.
             </s-banner>
           )}
         </s-stack>
@@ -191,7 +293,10 @@ export default function CollectionDisplayPage() {
         <s-paragraph color="subdued">Elevated II is tried first, then Cover, then the product&apos;s normal featured image.</s-paragraph>
       </s-section>
       <s-section slot="aside" heading="Theme compatibility">
-        <s-paragraph color="subdued">Color mode also updates the existing preferred_collection_colors metafield used by your tested theme code. SKU mode is stored separately for theme code that supports SKU matching.</s-paragraph>
+        <s-paragraph color="subdued">
+          Values are pulled live from the products already in each collection. Saving also updates the existing
+          preferred_collection_colors metafield used by your tested theme code.
+        </s-paragraph>
       </s-section>
     </s-page>
   );
