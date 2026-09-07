@@ -21,6 +21,7 @@ export default function App() {
         <s-link href="/app">Dashboard</s-link>
         <s-link href="/app/products">Product Titles</s-link>
         <s-link href="/app/additional">Alt Text Manager</s-link>
+        <s-link href="/app/collection-display">Collection Display</s-link>
       </s-app-nav>
       <Outlet />
     </AppProvider>
